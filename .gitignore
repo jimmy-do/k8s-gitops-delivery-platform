@@ -1,0 +1,40 @@
+# Terraform
+.terraform/
+.terraform*
+*.tfstate
+*.tfstate.backup
+*.tfstate.lock.info
+terraform.tfvars
+*.auto.tfvars
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Helm
+*.tgz
+
+# Kubernetes & Secrets
+*secret*.yaml
+*secrets*.yaml
+kubeconfig
+*.kubeconfig
+.kube/
+
+# Cloud & Local Env
+.aws/
+.env
+.env*
+
+# OS & IDE
+.DS_Store
+*.swp
+.vscode/
+.idea/
+
+# ArgoCD sensitive configs
+argocd-credentials.yaml
