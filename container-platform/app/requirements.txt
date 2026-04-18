@@ -1,0 +1,9 @@
+# Production dependencies only — no dev/test tooling in this file.
+# Dev deps (pytest, black, etc.) belong in requirements-dev.txt.
+#
+# Versions pinned to minor for reproducible builds.
+# Dependabot (or Renovate) should open PRs when patches are available.
+
+flask==3.1.0
+gunicorn==23.0.0
+prometheus-client==0.21.1
