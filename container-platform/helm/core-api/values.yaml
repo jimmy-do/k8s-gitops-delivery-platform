@@ -1,0 +1,123 @@
+# =============================================================================
+# values.yaml — chart defaults (development / local k3s baseline)
+#
+# Production overrides live in values-prod.yaml.
+# CI passes the image tag at deploy time: --set image.tag=$GITHUB_SHA
+#
+# Never put secrets here — use External Secrets Operator + AWS Secrets Manager.
+# =============================================================================
+
+replicaCount: 1  # overridden to 2 in values-prod.yaml
+
+image:
+  repository: ghcr.io/yourorg/portfolio-app # needs to be swapped on w/ AWS
+  # "latest" is intentionally the local default so `helm install` works
+  # without a tag. CI always overrides with the Git SHA — never ships "latest".
+  tag: latest
+  # IfNotPresent: don't re-pull if the tag already exists on the node.
+  # Always: forces a pull every pod start — useful only for mutable tags (never in prod).
+  pullPolicy: IfNotPresent
+
+# Service account with no auto-mounted token by default.
+# IRSA (IAM Roles for Service Accounts) annotates this SA with the AWS role ARN.
+serviceAccount:
+  create: true
+  name: ""  # defaults to release name if blank
+  # Annotations populated in values-prod.yaml with the IRSA role ARN.
+  annotations: {}
+
+service:
+  type: ClusterIP  # traffic enters only through the Ingress — never NodePort in prod
+  port: 80
+  targetPort: 5000  # matches the port Gunicorn binds inside the container
+
+ingress:
+  enabled: true
+  className: nginx  # nginx ingress controller — standard at most Bay Area companies
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    # TLS termination at the ingress layer — the app speaks plain HTTP inside the cluster.
+    # cert-manager annotation would go here for automatic TLS cert provisioning.
+  host: portfolio-app.local  # override in values-prod.yaml with real domain
+  tls: []  # populated in values-prod.yaml
+
+# Resource requests and limits are REQUIRED on every container.
+#
+# requests: what the scheduler reserves on the node. Determines pod placement.
+# limits:   hard ceiling. CPU = throttle. Memory = OOMKill (exit 137).
+
+# Rule of thumb: set requests at ~50% of limits to leave burst headroom
+# while giving the scheduler accurate placement information.
+resources:
+  requests:
+    cpu: "100m"     # 0.1 CPU — sufficient for idle Flask + Gunicorn
+    memory: "128Mi"
+  limits:
+    cpu: "500m"     # allow 5× burst before throttling
+    memory: "256Mi" # OOMKill threshold — watch this vs actual usage in Grafana
+
+# Liveness: is the container alive and responsive?
+#   Failure → K8s restarts the container (use for deadlocks, hung processes)
+# Readiness: is the container ready to accept traffic?
+#   Failure → pod removed from Service endpoints, NOT restarted
+# Startup: has the container finished initialising?
+#   Blocks liveness + readiness checks until it passes.
+#   Prevents K8s from killing a slow-starting app before it's had a chance to boot.
+probes:
+  startup:
+    path: /health/live
+    initialDelaySeconds: 0
+    periodSeconds: 5
+    failureThreshold: 12   # 12 × 5s = 60s max startup window
+  liveness:
+    path: /health/live
+    initialDelaySeconds: 0
+    periodSeconds: 10
+    failureThreshold: 3    # 3 × 10s = 30s before restart
+  readiness:
+    path: /health/ready
+    initialDelaySeconds: 0
+    periodSeconds: 5
+    failureThreshold: 3    # 3 × 5s = 15s before removed from endpoints
+
+autoscaling:
+  enabled: false  # enabled in values-prod.yaml
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  # 70% is a common production target — leaves 30% headroom for traffic spikes
+  # before HPA adds a new pod (pod creation takes ~30-60s).
+
+# Environment variables injected into the container.
+# Non-sensitive only — secrets come from External Secrets Operator.
+env:
+  APP_ENV: development
+  APP_VERSION: "0.1.0"
+  # LOG_LEVEL and other tunables can be added here without rebuilding the image.
+
+# Pod-level security context — applies to all containers in the pod.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  runAsGroup: 1001
+  fsGroup: 1001        # ensures mounted volumes are writable by appuser
+
+# Container-level security context — more granular than pod-level.
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL  # drop all Linux capabilities — principle of least privilege
+
+# NetworkPolicy — restricts ingress/egress to only what the app needs.
+# Enabled by default so every environment gets network isolation.
+networkPolicy:
+  enabled: true
+
+# Node selector, tolerations, and affinity — left empty by default so the
+# scheduler places pods freely. Override in values-prod.yaml to target
+# dedicated node groups or spread across AZs.
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "portfolio-app.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "portfolio-app.labels" . | nindent 4 }}
+data:
+  # Non-sensitive configuration only.
+  # The Deployment references this ConfigMap's checksum in an annotation,
+  # which forces a pod restart whenever this ConfigMap changes —
+  # preventing stale config from running in prod after a values update.
+  APP_ENV: {{ .Values.env.APP_ENV | quote }}
+  APP_VERSION: {{ .Values.env.APP_VERSION | quote }}

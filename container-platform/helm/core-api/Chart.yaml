@@ -1,0 +1,12 @@
+apiVersion: v2
+name: portfolio-app
+description: >
+  Production Helm chart for the k8s-gitops-delivery-platform portfolio app.
+  Includes Deployment, Service, Ingress, HPA, NetworkPolicy, and ServiceAccount.
+type: application
+# Chart version — bump this when the chart itself changes (templates, values schema).
+# Follows semver: breaking change = major.new feature = minor.bugfix = patch.
+version: 0.1.0
+# appVersion tracks the default application version. CI overrides this with
+# the actual Git SHA via --set image.tag=$GITHUB_SHA at deploy time.
+appVersion: "0.1.0"

@@ -1,0 +1,66 @@
+{{- if .Values.networkPolicy.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "portfolio-app.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "portfolio-app.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "portfolio-app.selectorLabels" . | nindent 6 }}
+
+  # Default-deny everything, then explicitly allow what's needed.
+  # This is the zero-trust network posture — pods are isolated by default.
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    # Allow traffic from the nginx ingress controller only.
+    # Without this, a compromised pod in another namespace could call our app directly,
+    # bypassing any WAF or rate limiting sitting in front of the ingress.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - port: 5000
+          protocol: TCP
+
+    # Allow Prometheus to scrape /metrics.
+    # The monitoring namespace label must match your actual monitoring namespace.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 5000
+          protocol: TCP
+
+  egress:
+    # DNS — required for service discovery (resolving other services by name).
+    # Without this egress rule, the pod can't resolve any hostname.
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+    # HTTPS to AWS APIs (Secrets Manager, ECR, CloudWatch).
+    # The pod uses IRSA to authenticate — the AWS SDK calls HTTPS endpoints.
+    - ports:
+        - port: 443
+          protocol: TCP
+
+    # RDS — the app connects to Postgres on port 5432.
+    # Restrict by namespace label so only the database namespace is reachable.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: database
+      ports:
+        - port: 5432
+          protocol: TCP
+{{- end }}
