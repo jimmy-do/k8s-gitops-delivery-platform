@@ -6,7 +6,7 @@ _helpers.tpl — reusable template fragments shared across all chart templates.
 Expand the chart name (used as a fallback for the app name).
 Truncated at 63 chars — Kubernetes label value limit.
 */}}
-{{- define "portfolio-app.name" -}}
+{{- define "core-api.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
@@ -14,7 +14,7 @@ Truncated at 63 chars — Kubernetes label value limit.
 Full release name: "<release>-<chart>" or just "<release>" if it already contains the chart name.
 Truncated at 63 chars to satisfy Kubernetes label constraints.
 */}}
-{{- define "portfolio-app.fullname" -}}
+{{- define "core-api.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
 {{- else }}
@@ -30,7 +30,7 @@ Truncated at 63 chars to satisfy Kubernetes label constraints.
 {{/*
 Chart label — "name-version", used in the helm.sh/chart label.
 */}}
-{{- define "portfolio-app.chart" -}}
+{{- define "core-api.chart" -}}
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
@@ -47,9 +47,9 @@ Using the full kubernetes.io label prefix (not just "app: foo") is the
 production convention — it avoids collisions and enables label-based queries
 across releases in the same namespace.
 */}}
-{{- define "portfolio-app.labels" -}}
-helm.sh/chart: {{ include "portfolio-app.chart" . }}
-{{ include "portfolio-app.selectorLabels" . }}
+{{- define "core-api.labels" -}}
+helm.sh/chart: {{ include "core-api.chart" . }}
+{{ include "core-api.selectorLabels" . }}
 {{- if .Chart.AppVersion }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
@@ -64,17 +64,17 @@ changing a selector on a Deployment requires deleting and recreating it.
 Deliberately not including version here — a version label in the selector
 would force a delete/recreate on every app version bump.
 */}}
-{{- define "portfolio-app.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "portfolio-app.name" . }}
+{{- define "core-api.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "core-api.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
 ServiceAccount name: use the override if provided, otherwise the full release name.
 */}}
-{{- define "portfolio-app.serviceAccountName" -}}
+{{- define "core-api.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create }}
-{{- default (include "portfolio-app.fullname" .) .Values.serviceAccount.name }}
+{{- default (include "core-api.fullname" .) .Values.serviceAccount.name }}
 {{- else }}
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
