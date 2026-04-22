@@ -2,14 +2,14 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "portfolio-app.fullname" . }}
+  name: {{ include "core-api.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "portfolio-app.labels" . | nindent 4 }}
+    {{- include "core-api.labels" . | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
-      {{- include "portfolio-app.selectorLabels" . | nindent 6 }}
+      {{- include "core-api.selectorLabels" . | nindent 6 }}
 
   # Default-deny everything, then explicitly allow what's needed.
   # This is the zero-trust network posture — pods are isolated by default.
