@@ -38,7 +38,7 @@ ingress:
     nginx.ingress.kubernetes.io/proxy-body-size: "10m"
     # TLS termination at the ingress layer — the app speaks plain HTTP inside the cluster.
     # cert-manager annotation would go here for automatic TLS cert provisioning.
-  host: portfolio-app.local  # override in values-prod.yaml with real domain
+  host: core-api.local  # override in values-prod.yaml with real domain
   tls: []  # populated in values-prod.yaml
 
 # Resource requests and limits are REQUIRED on every container.
