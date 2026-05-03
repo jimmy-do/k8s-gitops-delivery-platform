@@ -1,10 +1,10 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "portfolio-app.fullname" . }}
+  name: {{ include "core-api.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "portfolio-app.labels" . | nindent 4 }}
+    {{- include "core-api.labels" . | nindent 4 }}
 spec:
   # replicas is omitted when HPA is enabled — HPA owns the replica count.
   # Setting replicas here AND enabling HPA causes a fight: every Helm upgrade
@@ -14,7 +14,7 @@ spec:
   {{- end }}
   selector:
     matchLabels:
-      {{- include "portfolio-app.selectorLabels" . | nindent 6 }}
+      {{- include "core-api.selectorLabels" . | nindent 6 }}
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -27,13 +27,13 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "portfolio-app.selectorLabels" . | nindent 8 }}
+        {{- include "core-api.selectorLabels" . | nindent 8 }}
       annotations:
         # Force pod restart when ConfigMap content changes.
         # Without this, Helm upgrades that only change env values won't restart pods.
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
     spec:
-      serviceAccountName: {{ include "portfolio-app.serviceAccountName" . }}
+      serviceAccountName: {{ include "core-api.serviceAccountName" . }}
 
       # Do NOT auto-mount the service account token unless the app explicitly
       # needs to call the Kubernetes API. Reduces attack surface.

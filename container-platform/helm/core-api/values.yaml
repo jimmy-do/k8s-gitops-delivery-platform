@@ -10,7 +10,7 @@
 replicaCount: 1  # overridden to 2 in values-prod.yaml
 
 image:
-  repository: ghcr.io/yourorg/portfolio-app # needs to be swapped on w/ AWS
+  repository: ghcr.io/yourorg/core-api # needs to be swapped on w/ AWS
   # "latest" is intentionally the local default so `helm install` works
   # without a tag. CI always overrides with the Git SHA — never ships "latest".
   tag: latest

@@ -105,7 +105,7 @@ def index():
     logger.info("msg=index_request env=%s version=%s", APP_ENV, APP_VERSION)
     return jsonify(
         {
-            "service": "portfolio-app",
+            "service": "core-api",
             "env": APP_ENV,
             "version": APP_VERSION,
             "status": "ok",
