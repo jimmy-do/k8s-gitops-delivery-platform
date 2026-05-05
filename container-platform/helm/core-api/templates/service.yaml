@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "core-api.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "core-api.labels" . | nindent 4 }}
+spec:
+  # ClusterIP: only reachable from inside the cluster.
+  # External traffic enters through the Ingress controller, which forwards
+  # to this Service. Never expose NodePort or LoadBalancer directly in prod —
+  # it bypasses the Ingress (and any WAF/rate limiting sitting in front of it).
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.port }}        # port the Service listens on (80)
+      targetPort: {{ .Values.service.targetPort }}  # port Gunicorn binds inside the container (5000)
+      protocol: TCP
+      name: http
+  selector:
+    # Must match the selectorLabels in the Deployment spec.selector.matchLabels.
+    # If these don't match exactly, kubectl get endpoints returns an empty list
+    # and all traffic silently drops. This is the #1 cause of "service unreachable".
+    {{- include "core-api.selectorLabels" . | nindent 4 }}
