@@ -1,0 +1,81 @@
+# =============================================================================
+# values-prod.yaml — production overrides
+#
+# Merged on top of values.yaml at deploy time:
+#   helm upgrade --install core-api ./helm/core-api \
+#     --values helm/core-api/values.yaml \
+#     --values helm/core-api/values-prod.yaml \
+#     --set image.tag=$GITHUB_SHA
+#
+# This file is safe to commit — it contains no secrets.
+# Secrets are in AWS Secrets Manager, pulled at runtime by External Secrets Operator.
+# =============================================================================
+
+replicaCount: 2  # minimum 2 for zero-downtime rolling updates
+
+image:
+  repository: <ACCOUNT_ID>.dkr.ecr.us-west-2.amazonaws.com/core-api
+  # tag is always overridden by CI with $GITHUB_SHA — this is a placeholder
+  tag: placeholder
+  pullPolicy: IfNotPresent
+
+serviceAccount:
+  create: true
+  annotations:
+    # IRSA — binds this K8s ServiceAccount to an AWS IAM role via OIDC.
+    # The pod inherits AWS permissions (ECR pull, Secrets Manager read)
+    # without any long-lived credentials on disk.
+    # Populated by Terraform output → CI env var → values override at deploy time.
+    eks.amazonaws.com/role-arn: arn:aws:iam::<ACCOUNT_ID>:role/core-api-pod-role
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 5000
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    # cert-manager.io/cluster-issuer: letsencrypt-prod  # uncomment when cert-manager is deployed
+  host: core-api.example.com  # replace with your actual domain
+  tls: []
+  # tls:
+  #   - secretName: core-api-tls
+  #     hosts:
+  #       - core-api.example.com
+
+resources:
+  requests:
+    cpu: "200m"
+    memory: "256Mi"
+  limits:
+    cpu: "1000m"
+    memory: "512Mi"
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+env:
+  APP_ENV: production
+  APP_VERSION: placeholder  # overridden by CI with $GITHUB_SHA
+
+# Pod anti-affinity: spread replicas across availability zones.
+# Prevents both pods from landing on the same node, which would make
+# a single node failure take down the entire service.
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - core-api
+          topologyKey: kubernetes.io/hostname

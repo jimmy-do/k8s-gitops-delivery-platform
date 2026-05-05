@@ -1,0 +1,40 @@
+{{- if .Values.autoscaling.enabled -}}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "core-api.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "core-api.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "core-api.fullname" . }}
+  minReplicas: {{ .Values.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }}
+  behavior:
+    scaleUp:
+      # Scale up aggressively — traffic spikes need fast response.
+      # Adding pods within 60s prevents user-visible latency during a spike.
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 2          # add up to 2 pods per period
+          periodSeconds: 60
+    scaleDown:
+      # Scale down conservatively — avoid thrashing (scale down then back up immediately).
+      # 5 min window prevents removing pods prematurely during a brief traffic lull.
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1          # remove at most 1 pod per period
+          periodSeconds: 60
+{{- end }}
