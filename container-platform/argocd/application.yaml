@@ -1,0 +1,70 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: core-api
+  # ArgoCD Application resources always live in the argocd namespace,
+  # regardless of where the app itself deploys.
+  namespace: argocd
+  labels:
+    app.kubernetes.io/managed-by: argocd
+  # Finalizer: prevents ArgoCD from orphaning cluster resources when this
+  # Application is deleted. When you delete the Application, ArgoCD first
+  # deletes all managed cluster resources, then removes the Application.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/jimmy-do/k8s-gitops-delivery-platform
+    # ArgoCD watches this branch. CI pushes the new image tag here.
+    # Production pattern: target a release branch or tag, not main directly,
+    # so you can gate production deploys through a PR/review process.
+    targetRevision: main
+    # Path within the repo to the Helm chart
+    path: container-platform/helm/core-api
+    helm:
+      # ArgoCD merges these values files in order — later files override earlier ones.
+      valueFiles:
+        - values.yaml
+        - values-prod.yaml
+      # image.tag is updated here by the CI pipeline after every successful build.
+      # CI runs: argocd app set portfolio-app --helm-set image.tag=$GITHUB_SHA
+      # OR: CI updates values-prod.yaml in Git and ArgoCD auto-syncs.
+      # We use the Git-update approach — keeps Git as the single source of truth.
+      parameters: []
+
+  destination:
+    # kubernetes.default.svc = the same cluster ArgoCD is running in.
+    # For multi-cluster setups, this would be the external cluster API endpoint.
+    server: https://kubernetes.default.svc
+    namespace: core-api
+
+  syncPolicy:
+    automated:
+      # prune: true — when a resource is removed from Git, ArgoCD deletes it
+      # from the cluster. Without this, deleted manifests leave orphan resources.
+      prune: true
+      # selfHeal: true — if someone does a manual kubectl edit/apply that drifts
+      # the cluster from Git, ArgoCD reverts it within ~3 minutes.
+      # This is the core GitOps guarantee: Git is ALWAYS the source of truth.
+      # In interviews: "selfHeal solves the drift problem I didn't have at BNSF
+      # because bare metal had no continuous reconciliation loop."
+      selfHeal: true
+    syncOptions:
+      # Create the namespace if it doesn't exist — avoids a manual bootstrapping step.
+      - CreateNamespace=true
+      # Apply server-side so large CRDs don't hit the kubectl annotation size limit.
+      - ServerSideApply=true
+
+  # Health checks — ArgoCD marks the app Healthy only when all resources pass.
+  # The Deployment is only Healthy when all pods pass their readiness probes.
+  # This means ArgoCD sync status = direct indicator of prod health.
+  ignoreDifferences:
+    # HPA manages replicas at runtime — ignore drift between Git (minReplicas)
+    # and cluster (actual replicas chosen by HPA). Without this, ArgoCD would
+    # continuously try to reset replicas to the chart value.
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
