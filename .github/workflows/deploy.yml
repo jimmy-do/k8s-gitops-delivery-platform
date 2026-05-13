@@ -1,0 +1,215 @@
+# =============================================================================
+# deploy.yml — CI for core-api
+#
+# Triggered by pushes to main that touch the app or chart. Builds, scans,
+# pushes the image to ECR, then commits the new image tag into
+# values-prod.yaml. ArgoCD (Phase 1) picks up that commit and rolls the deploy.
+#
+# Auth model: no AWS access keys anywhere. The job presents a GitHub OIDC
+# token; AWS verifies it against the IAM OIDC provider Terraform created,
+# and grants a short-lived (1h) STS session keyed to the github_actions role.
+#
+# Rollback model: the canonical rollback is `git revert <bad-commit>` →
+# ArgoCD re-syncs. The rollback-on-failure job below is a *backstop* for the
+# narrow window between CI failure and an operator noticing — it runs
+# `kubectl rollout undo` directly against the cluster so the previous
+# ReplicaSet comes back into service immediately.
+# =============================================================================
+
+name: deploy core-api
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "container-platform/app/**"
+      - "container-platform/Dockerfile"
+      - "container-platform/helm/core-api/**"
+      - ".github/workflows/deploy.yml"
+
+# Cancel an in-flight run if a newer commit lands on main. Saves ECR pushes
+# and prevents two CI runs racing to commit the manifests update.
+concurrency:
+  group: deploy-core-api
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: us-west-2
+  ECR_REPOSITORY: core-api
+  HELM_VALUES_FILE: container-platform/helm/core-api/values-prod.yaml
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1 — build, scan, push the image
+  # ---------------------------------------------------------------------------
+  build-scan-push:
+    runs-on: ubuntu-latest
+
+    # Token permissions — principle of least privilege for the GITHUB_TOKEN.
+    permissions:
+      id-token: write  # required to present the OIDC token to AWS
+      contents: read
+
+    outputs:
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+      image_uri: ${{ steps.meta.outputs.image_uri }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # AWS auth via OIDC — no long-lived keys
+      # -----------------------------------------------------------------------
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # -----------------------------------------------------------------------
+      # Image metadata
+      #   Tag = first 12 chars of the git SHA. Never "latest" (per CLAUDE.md).
+      #   Immutable tag means a redeploy can never silently change what runs.
+      # -----------------------------------------------------------------------
+      - name: Compute image metadata
+        id: meta
+        run: |
+          IMAGE_TAG="${GITHUB_SHA::12}"
+          IMAGE_URI="${{ steps.ecr-login.outputs.registry }}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "image_uri=${IMAGE_URI}"  >> "$GITHUB_OUTPUT"
+
+      # -----------------------------------------------------------------------
+      # Build the image
+      #   Buildx + GitHub Actions cache shaves minutes off layer rebuilds.
+      #   push: false / load: true — load into the local Docker daemon so
+      #   Trivy can scan it before any push happens.
+      # -----------------------------------------------------------------------
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (no push yet — scan first)
+        uses: docker/build-push-action@v6
+        with:
+          context: container-platform
+          file: container-platform/Dockerfile
+          push: false
+          load: true
+          tags: ${{ steps.meta.outputs.image_uri }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # -----------------------------------------------------------------------
+      # Trivy scan — BLOCKS the push if a CRITICAL or HIGH CVE is found
+      #
+      # Per CLAUDE.md: scan BEFORE push, never after. A vulnerable image
+      # that's already in ECR is harder to clean up than one that never made
+      # it past CI. ignore-unfixed avoids blocking on CVEs the upstream
+      # hasn't patched yet (action would be: pin a workaround or accept risk).
+      # -----------------------------------------------------------------------
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.meta.outputs.image_uri }}
+          format: table
+          exit-code: 1
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          vuln-type: os,library
+
+      - name: Push image to ECR
+        run: docker push "${{ steps.meta.outputs.image_uri }}"
+
+  # ---------------------------------------------------------------------------
+  # Job 2 — update Helm values, commit, push (ArgoCD picks it up)
+  # ---------------------------------------------------------------------------
+  update-manifest:
+    needs: build-scan-push
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # MANIFEST_BOT_TOKEN is a PAT (or GitHub App token) with `contents:write`
+          # on this repo. The default GITHUB_TOKEN can't push to a branch that
+          # has branch protection rules requiring PR review.
+          token: ${{ secrets.MANIFEST_BOT_TOKEN }}
+          fetch-depth: 0
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Update image tag in values-prod.yaml
+        run: |
+          yq -i ".image.tag = \"${{ needs.build-scan-push.outputs.image_tag }}\"" \
+            "${HELM_VALUES_FILE}"
+
+      - name: Commit + push manifest update
+        run: |
+          git config user.email "ci-bot@users.noreply.github.com"
+          git config user.name  "ci-bot"
+          git add "${HELM_VALUES_FILE}"
+
+          # No-op if the rebuild produced the same tag (manual workflow re-run).
+          if git diff --staged --quiet; then
+            echo "No manifest changes — image tag already current."
+            exit 0
+          fi
+
+          # [skip ci] prevents this manifest commit from triggering another
+          # workflow run (which would build the same image with a different
+          # SHA → infinite loop).
+          git commit -m "ci(core-api): bump image to ${{ needs.build-scan-push.outputs.image_tag }} [skip ci]"
+          git push origin main
+
+  # ---------------------------------------------------------------------------
+  # Job 3 — rollback hook (backstop only — git revert is the primary path)
+  #
+  # Fires if anything above failed. Walks straight to the cluster and runs
+  # `kubectl rollout undo`. ArgoCD will then notice OutOfSync state and
+  # reconcile back to whatever values-prod.yaml currently says — so if the
+  # bad commit got pushed to Git, ArgoCD will re-deploy it. The real fix is
+  # always: `git revert <bad-commit> && git push`.
+  # ---------------------------------------------------------------------------
+  rollback-on-failure:
+    needs: [build-scan-push, update-manifest]
+    if: failure()
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Configure kubectl
+        run: |
+          aws eks update-kubeconfig \
+            --name "${{ secrets.EKS_CLUSTER_NAME }}" \
+            --region "${AWS_REGION}"
+
+      - name: kubectl rollout undo
+        run: |
+          # The Terraform-managed EKS Access Entry grants this CI role the
+          # AmazonEKSEditPolicy scoped to the core-api namespace, so this
+          # works without any in-cluster RBAC manifests.
+          kubectl rollout undo deployment/core-api -n core-api
+          kubectl rollout status deployment/core-api -n core-api --timeout=2m
