@@ -1,0 +1,5 @@
+# Copy to terraform.tfvars (which is gitignored) and customize.
+# Anything checked into Git ends up in commit history — never put secrets here.
+
+github_org = "your-github-org-or-username"
+# github_repo defaults to "k8s-gitops-delivery-platform" — override only if you forked.
