@@ -114,7 +114,7 @@ jobs:
       # hasn't patched yet (action would be: pin a workaround or accept risk).
       # -----------------------------------------------------------------------
       - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ steps.meta.outputs.image_uri }}
           format: table
