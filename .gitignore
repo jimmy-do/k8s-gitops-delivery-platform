@@ -38,3 +38,21 @@ kubeconfig
 
 # ArgoCD sensitive configs
 argocd-credentials.yaml
+
+# Terraform (Phase 2 additions)
+*.tfvars.example
+!*.tfvars.example
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# Bootstrap exception — state bucket can't store its own creation state
+!infrastructure-cicd/terraform/bootstrap/terraform.tfstate
+!infrastructure-cicd/terraform/bootstrap/terraform.tfstate.backup
+
+# .terraform.lock.hcl is intentionally committed — pins provider versions
