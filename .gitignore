@@ -1,6 +1,8 @@
 # Terraform
 .terraform/
 .terraform*
+!/.terraform.lock.hcl
+!/infrastructure-cicd/terraform/*/.terraform.lock.hcl
 *.tfstate
 *.tfstate.backup
 *.tfstate.lock.info
@@ -21,6 +23,8 @@ venv/
 # Kubernetes & Secrets
 *secret*.yaml
 *secrets*.yaml
+!observability/**/templates/*secret*.yaml
+!observability/**/templates/*secrets*.yaml
 kubeconfig
 *.kubeconfig
 .kube/

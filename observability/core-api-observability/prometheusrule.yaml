@@ -1,0 +1,95 @@
+# PrometheusRule — three alerts for core-api. The Prometheus Operator watches this CR, renders
+# it to a rules file inside the Prometheus pod, and triggers a config reload.
+#
+# Alert philosophy (interview talking point): every alert MUST be actionable. If "page someone at
+# 3am" is the wrong answer to firing this alert, the severity is wrong. Two warnings + one
+# critical reflects that calibration.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: core-api
+  namespace: core-api
+  labels:
+    release: kps  # same reasoning as ServiceMonitor — forward-compat for tighter selector
+spec:
+  groups:
+    - name: core-api.rules
+      # interval controls how often the rules in this group are evaluated. Default 30s matches
+      # the scrape interval; tighter eval doesn't help if the underlying samples haven't refreshed.
+      interval: 30s
+
+      rules:
+        # ───────────────────────────────────────────────────────────────────────────
+        # HighErrorRate — 5xx rate > 5% sustained for 2m. User-impacting → PagerDuty.
+        # ───────────────────────────────────────────────────────────────────────────
+        - alert: HighErrorRate
+          # PromQL: ratio of 5xx requests to all requests, per-service, over a 2-minute window.
+          # rate() applied to the bucket counter, then summed by service. Both numerator and
+          # denominator use the same window so the ratio is well-defined.
+          #
+          # http_requests_total is the metric the Flask app exposes via prometheus_client.
+          # Status labels: 5xx pattern catches 500, 502, 503, 504, 599 etc.
+          expr: |
+            (
+              sum by (service) (rate(http_requests_total{namespace="core-api", status=~"5.."}[2m]))
+              /
+              sum by (service) (rate(http_requests_total{namespace="core-api"}[2m]))
+            ) > 0.05
+          for: 2m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "core-api 5xx rate above 5% on {{ $labels.service }}"
+            description: |
+              Service {{ $labels.service }} in namespace {{ $labels.namespace }} is returning 5xx
+              for {{ $value | humanizePercentage }} of requests, sustained for 2 minutes.
+            runbook_url: "https://github.com/jimmy-do/k8s-gitops-delivery-platform/blob/main/observability/core-api-observability/runbooks/high-error-rate.md"
+
+        # ───────────────────────────────────────────────────────────────────────────
+        # PodCrashLooping — restart rate > 0 sustained for 5m. Warning.
+        # ───────────────────────────────────────────────────────────────────────────
+        - alert: PodCrashLooping
+          # kube_pod_container_status_restarts_total comes from kube-state-metrics. Counter,
+          # so rate() gives restarts per second. > 0 sustained for 5m means restarts have been
+          # happening continuously — stricter than `increase(...) > 0` which catches a single
+          # 5m-ago restart. Per MD: "restart rate > 0 for 5m".
+          expr: |
+            rate(kube_pod_container_status_restarts_total{namespace="core-api"}[5m]) > 0
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Pod {{ $labels.pod }} in {{ $labels.namespace }} is restarting"
+            description: |
+              Container {{ $labels.container }} in pod {{ $labels.pod }} has been restarting
+              continuously for 5 minutes. Likely causes: OOMKill, failing liveness probe,
+              app-level crash on startup.
+            runbook_url: "https://github.com/jimmy-do/k8s-gitops-delivery-platform/blob/main/observability/core-api-observability/runbooks/pod-crash-looping.md"
+
+        # ───────────────────────────────────────────────────────────────────────────
+        # HighMemoryUsage — working set > 85% of limit for 5m. Warning, pre-OOM.
+        # ───────────────────────────────────────────────────────────────────────────
+        - alert: HighMemoryUsage
+          # container_memory_working_set_bytes comes from cAdvisor (via the kubelet's /metrics
+          # endpoint). This is the metric the kernel uses to decide OOM-kill, NOT RSS.
+          # kube_pod_container_resource_limits is from KSM; join on namespace+pod+container.
+          # `on (...)` controls the join keys; `group_left` says "many-to-one" (a pod has one limit).
+          expr: |
+            (
+              container_memory_working_set_bytes{namespace="core-api", container!="", container!="POD"}
+              /
+              on (namespace, pod, container) group_left
+              kube_pod_container_resource_limits{namespace="core-api", resource="memory"}
+            ) > 0.85
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "{{ $labels.container }} in {{ $labels.pod }} above 85% memory limit"
+            description: |
+              Container {{ $labels.container }} working set is {{ $value | humanizePercentage }}
+              of its memory limit. OOMKill imminent if growth continues. Check for leak or bump limit.
+            runbook_url: "https://github.com/jimmy-do/k8s-gitops-delivery-platform/blob/main/observability/core-api-observability/runbooks/high-memory-usage.md"

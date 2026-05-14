@@ -1,0 +1,61 @@
+# ServiceMonitor for the three core-api Services. The Prometheus Operator watches this CR and
+# generates Prometheus scrape config; the Prometheus instance reloads automatically.
+#
+# Targeting model: selector matches Services by label, then the operator queries the K8s API for
+# each Service's Endpoints and produces one scrape target per Endpoint (i.e. per Pod IP).
+# Prometheus doesn't need to know about pods directly — it follows the Endpoints chain.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: core-api
+  namespace: core-api  # ServiceMonitor must live in the same namespace as the Services it targets
+  labels:
+    # release=kps would scope this to Prometheus instances looking for that label. We left
+    # serviceMonitorSelectorNilUsesHelmValues=false in kps values.yaml, so we don't need it.
+    # Kept here for forward-compat if we tighten the selector later.
+    release: kps
+spec:
+  # Match Services by label. Phase 1's core-api chart labels Services with app.kubernetes.io/name.
+  selector:
+    matchLabels:
+      app.kubernetes.io/part-of: core-api
+
+  # Optional: restrict to specific Services within the selected set. Empty namespaceSelector
+  # means "same namespace as this ServiceMonitor" (i.e. core-api).
+  namespaceSelector:
+    matchNames:
+      - core-api
+
+  endpoints:
+    - # Port name comes from the Service definition in Phase 1's helm/core-api chart.
+      # If Phase 1 uses port "http" with a /metrics path, this section says "scrape that port".
+      # If Phase 1 has a separate "metrics" port (production-preferred — keeps app traffic and
+      # scrape traffic on separate ports), change this to "metrics".
+      port: http
+      path: /metrics
+      interval: 30s        # 30s is the kps default and a good baseline. 15s for high-fidelity.
+      scrapeTimeout: 10s   # MUST be < interval, else Prom kills the scrape mid-flight.
+
+      # Relabelings run on TARGETS before scraping (i.e. on metadata labels from K8s SD).
+      # Used to rename or attach labels to all metrics from this target.
+      relabelings:
+        # Promote namespace from SD meta to a permanent label on every metric.
+        # The kubernetes_sd target labels (__meta_*) are stripped before scrape unless promoted.
+        - sourceLabels: [__meta_kubernetes_namespace]
+          targetLabel: namespace
+          action: replace
+
+        # Promote the Service name as `service`.
+        - sourceLabels: [__meta_kubernetes_service_name]
+          targetLabel: service
+          action: replace
+
+        # Promote the Pod name as `pod`. Useful for correlating with Loki log queries.
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: pod
+          action: replace
+
+      # metricRelabelings run on METRICS after scraping. Used to drop high-cardinality metrics
+      # or rename labels on collected samples. Left empty — add when cardinality complaints
+      # show up in the Prometheus tsdb_status endpoint.
+      metricRelabelings: []

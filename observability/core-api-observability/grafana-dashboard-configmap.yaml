@@ -1,0 +1,123 @@
+# Grafana dashboard ConfigMap. The kps Grafana sidecar (configured in values.yaml above with
+# sidecar.dashboards.label=grafana_dashboard) watches for ConfigMaps with this label, reads the
+# embedded JSON, and POSTs it to Grafana's dashboards API. No manual import, no API tokens.
+#
+# The four panels here are the Golden Signals (Beyer/Murphy/SRE book):
+#   1. Traffic    — RPS
+#   2. Errors     — 5xx ratio
+#   3. Latency    — p99
+#   4. Saturation — memory working set % of limit
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: core-api-golden-signals
+  namespace: monitoring  # ConfigMap MUST be in the same ns as Grafana, OR sidecar.searchNamespace=ALL
+  labels:
+    grafana_dashboard: "1"  # the magic label the sidecar looks for
+data:
+  core-api-golden-signals.json: |
+    {
+      "title": "core-api Golden Signals",
+      "uid": "core-api-golden-signals",
+      "tags": ["core-api", "golden-signals"],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "refresh": "30s",
+      "time": { "from": "now-1h", "to": "now" },
+      "templating": {
+        "list": [
+          {
+            "name": "service",
+            "type": "query",
+            "datasource": "Prometheus",
+            "query": "label_values(http_requests_total{namespace=\"core-api\"}, service)",
+            "refresh": 2,
+            "includeAll": true,
+            "multi": true
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "title": "Traffic — requests per second",
+          "type": "timeseries",
+          "datasource": "Prometheus",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+          "targets": [
+            {
+              "expr": "sum by (service) (rate(http_requests_total{namespace=\"core-api\", service=~\"$service\"}[2m]))",
+              "legendFormat": "{{service}}"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "reqps" } }
+        },
+        {
+          "id": 2,
+          "title": "Errors — 5xx ratio",
+          "type": "timeseries",
+          "datasource": "Prometheus",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+          "targets": [
+            {
+              "expr": "sum by (service) (rate(http_requests_total{namespace=\"core-api\", service=~\"$service\", status=~\"5..\"}[2m])) / sum by (service) (rate(http_requests_total{namespace=\"core-api\", service=~\"$service\"}[2m]))",
+              "legendFormat": "{{service}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 0.01 },
+                  { "color": "red", "value": 0.05 }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": 3,
+          "title": "Latency — p99 (seconds)",
+          "type": "timeseries",
+          "datasource": "Prometheus",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.99, sum by (service, le) (rate(http_request_duration_seconds_bucket{namespace=\"core-api\", service=~\"$service\"}[2m])))",
+              "legendFormat": "{{service}}"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "s" } }
+        },
+        {
+          "id": 4,
+          "title": "Saturation — memory % of limit",
+          "type": "timeseries",
+          "datasource": "Prometheus",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+          "targets": [
+            {
+              "expr": "container_memory_working_set_bytes{namespace=\"core-api\", container!=\"\", container!=\"POD\"} / on (namespace, pod, container) group_left kube_pod_container_resource_limits{namespace=\"core-api\", resource=\"memory\"}",
+              "legendFormat": "{{pod}}/{{container}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 0.7 },
+                  { "color": "red", "value": 0.85 }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }

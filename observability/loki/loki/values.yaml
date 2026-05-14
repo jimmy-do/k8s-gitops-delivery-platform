@@ -1,0 +1,77 @@
+loki:
+  # Top-level loki section: tells the chart what mode to run, what auth/storage to use.
+  loki:
+    auth_enabled: false  # single-tenant; multi-tenancy requires a header gateway in front
+
+    # Single-binary mode: monolith ingester+querier+distributor. Right for portfolio scale.
+    commonConfig:
+      replication_factor: 1  # single-replica; production would be 3 with simple-scalable
+
+    schemaConfig:
+      configs:
+        # Modern TSDB index format (replaces boltdb-shipper for newer Loki). v13 schema is current.
+        - from: "2024-01-01"
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: loki_index_
+            period: 24h
+
+    # Filesystem storage on a PVC. S3 = the production swap-in here; filesystem keeps the
+    # portfolio install self-contained on EKS without needing an extra bucket + IAM role.
+    storage:
+      type: filesystem
+
+  # Deployment mode: SingleBinary keeps everything in one StatefulSet replica. Easier to debug,
+  # easier to reason about — there's literally one pod doing everything.
+  deploymentMode: SingleBinary
+
+  singleBinary:
+    replicas: 1  # bump to 2-3 if you add read replication; single is fine for portfolio
+    persistence:
+      enabled: true
+      storageClass: gp3
+      size: 50Gi  # ~7d retention at low log volume; tune after first real usage
+
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+
+  # Disable all the multi-component deployments — we're running everything in singleBinary.
+  # Without these explicit zeros the chart will deploy read/write/backend pods we don't want.
+  read:
+    replicas: 0
+  write:
+    replicas: 0
+  backend:
+    replicas: 0
+
+  # Disable internal monitoring stack — kps already runs Prometheus, no need for a second one.
+  test:
+    enabled: false
+
+  lokiCanary:
+    enabled: false
+
+  monitoring:
+    selfMonitoring:
+      enabled: false
+      grafanaAgent:
+        installOperator: false
+
+  # Disable the in-chart gateway (nginx in front of Loki). Single-binary doesn't need it; clients
+  # talk directly to the Loki Service on port 3100.
+  gateway:
+    enabled: false
+
+  # Disable chunks cache and results cache (memcached). Adds operational complexity for marginal
+  # benefit at portfolio scale.
+  chunksCache:
+    enabled: false
+  resultsCache:
+    enabled: false

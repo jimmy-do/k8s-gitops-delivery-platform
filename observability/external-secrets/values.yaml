@@ -1,0 +1,94 @@
+# Values for the upstream external-secrets subchart.
+# Reference: https://github.com/external-secrets/external-secrets/tree/main/deploy/charts/external-secrets
+#
+# CRITICAL: top-level key MUST match dependency name in Chart.yaml ("external-secrets").
+# Helm scopes subchart values under this key — without it, none of these values reach the subchart.
+external-secrets:
+
+  # CRDs ship with the chart. False here means we'd have to install CRDs out-of-band before the
+  # chart, splitting ownership across two tools. Leave true so this directory is the single
+  # source of truth for ESO's surface area.
+  installCRDs: true
+
+  # ServiceAccount carries the IRSA annotation that lets ESO assume the IAM role created in
+  # Phase 2. The annotation is THE auth mechanism — without it, the controller pod has no AWS
+  # creds and the ClusterSecretStore reconcile fails with "AccessDenied".
+  serviceAccount:
+    create: true
+    name: external-secrets
+    annotations:
+      # Replace placeholders after `terraform apply` of the Phase 2 amendment.
+      # In production this gets templated per-environment via ArgoCD ApplicationSet generators
+      # (one Application per env, each with its own values overlay). Hardcoded here for clarity.
+      eks.amazonaws.com/role-arn: arn:aws:iam::<AWS_ACCOUNT_ID>:role/<CLUSTER_NAME>-external-secrets
+
+  # HA: two replicas, leader-election handles single-active. Cluster Autoscaler/Karpenter places
+  # them on different nodes via the default soft anti-affinity in the chart.
+  replicaCount: 2
+
+  # Burstable QoS sized for ~10-30 ExternalSecret resources. Controllers spike during reconcile
+  # loops, so requests < limits is correct. Tighten at scale by measuring with the kps substack.
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 256Mi
+
+  # Hardening: non-root, read-only root FS, drop all caps, RuntimeDefault seccomp.
+  # Same standard as Phase 1's core-api Dockerfile USER directive. The four-layer security model
+  # locked in CLAUDE.md (SG → NetworkPolicy → securityContext → Dockerfile USER) — this is layer 3.
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+    seccompProfile:
+      type: RuntimeDefault
+
+  # Webhook validates ExternalSecret manifests on admission. HA replicas so admission doesn't
+  # block when one pod is down (otherwise every `kubectl apply` of an ExternalSecret fails).
+  webhook:
+    replicaCount: 2
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 1000
+      readOnlyRootFilesystem: true
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
+
+  # cert-controller manages TLS for the webhook (rotates the serving cert).
+  certController:
+    replicaCount: 2
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 1000
+      readOnlyRootFilesystem: true
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
+
+  # Exposes /metrics on each component. The kps substack will create a ServiceMonitor for these
+  # — but we DON'T enable the chart's built-in ServiceMonitor here because that would put SM
+  # lifecycle inside this chart (split ownership). kps owns all ServiceMonitors.
+  metrics:
+    service:
+      enabled: true

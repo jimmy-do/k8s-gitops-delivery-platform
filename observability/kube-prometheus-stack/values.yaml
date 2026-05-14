@@ -1,0 +1,273 @@
+# kube-prometheus-stack values. Top-level key MUST match the dependency name in Chart.yaml.
+kube-prometheus-stack:
+
+  # Short name override so resources read as kps-prometheus, kps-alertmanager, kps-grafana —
+  # cleaner than the default mouthful. Also keeps Service names short for ServiceMonitor selectors.
+  nameOverride: kps
+  fullnameOverride: kps
+
+  # ──────────────────────────────────────────────────────────────────────────────────
+  # CRDs
+  # ──────────────────────────────────────────────────────────────────────────────────
+  # CRDs ship inside the chart. Same trade-off as ESO: simpler install at the cost of
+  # `helm uninstall` removing CRDs and orphaning ServiceMonitors. For portfolio scope this is fine.
+  # Production at scale ships CRDs as a separate sync-wave -1 Application.
+  crds:
+    enabled: true
+
+  # ──────────────────────────────────────────────────────────────────────────────────
+  # Prometheus
+  # ──────────────────────────────────────────────────────────────────────────────────
+  prometheus:
+    enabled: true
+    prometheusSpec:
+      # Retention is on time (15d) AND size (45Gi). 15d covers two full incident postmortem cycles;
+      # longer retention belongs in Thanos (out of scope). Size limit prevents disk-full when a
+      # cardinality bomb fires faster than retention can clean up.
+      retention: 15d
+      retentionSize: 45GiB
+
+      # External labels applied to EVERY metric leaving this Prometheus (federation, remote_write,
+      # alert annotations). `cluster` and `env` make multi-cluster Grafana dashboards filterable.
+      # This is the "promote env onto every metric" pattern from the MD — done at the instance
+      # level rather than per-metric relabel, which is the production-correct location.
+      externalLabels:
+        cluster: production-eks
+        env: prod
+
+      # ServiceMonitor / PodMonitor / PrometheusRule discovery: cluster-wide, all labels.
+      # `*SelectorNilUsesHelmValues: false` is the operator's way to say "don't restrict to
+      # release=kps label — pick up anything in any namespace". Trade-off: any team can land a
+      # ServiceMonitor that affects scrape load. For a one-team portfolio this is correct.
+      # Production multi-tenant clusters use the chart's default and label-scope their SMs.
+      serviceMonitorSelectorNilUsesHelmValues: false
+      serviceMonitorSelector: {}
+      serviceMonitorNamespaceSelector: {}
+
+      podMonitorSelectorNilUsesHelmValues: false
+      podMonitorSelector: {}
+      podMonitorNamespaceSelector: {}
+
+      ruleSelectorNilUsesHelmValues: false
+      ruleSelector: {}
+      ruleNamespaceSelector: {}
+
+      # Storage — PVC backed by gp3 (Phase 2's default storage class). 50Gi gives headroom over
+      # the 45GiB retentionSize cap; the operator won't shrink below this.
+      storageSpec:
+        volumeClaimTemplate:
+          spec:
+            accessModes: ["ReadWriteOnce"]
+            storageClassName: gp3
+            resources:
+              requests:
+                storage: 50Gi
+
+      # Resource budget. Cardinality scales memory roughly linearly; 2Gi covers ~1M active series.
+      # Tighten with kube-state-metrics after first real scrape data lands.
+      resources:
+        requests:
+          cpu: 200m
+          memory: 1Gi
+        limits:
+          cpu: 1000m
+          memory: 2Gi
+
+      # Two replicas; the operator handles WAL replication. Without this, a node reboot loses
+      # scrape data until Prom comes back. HA is cheap on EKS.
+      replicas: 2
+
+      # Hardening: non-root, read-only root FS, drop ALL caps. Same standard as Phase 1.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 2000
+        seccompProfile:
+          type: RuntimeDefault
+
+  # ──────────────────────────────────────────────────────────────────────────────────
+  # Alertmanager
+  # ──────────────────────────────────────────────────────────────────────────────────
+  alertmanager:
+    enabled: true
+
+    # Inline AM config. file_-suffixed fields read webhook secrets from disk — the secret is
+    # projected via alertmanagerSpec.secrets[] below, mounted at /etc/alertmanager/secrets/<name>/.
+    # NEVER inline the webhook URL here — it would land in Git via this values.yaml.
+    config:
+      global:
+        resolve_timeout: 5m
+
+      # Root route. Defaults that apply to every alert unless overridden by a child route.
+      route:
+        receiver: "null"  # fallback if no severity matches
+        group_by: ["namespace", "alertname"]
+        group_wait: 30s        # wait 30s for related alerts to batch
+        group_interval: 5m     # then a new batch every 5m if there's still activity
+        repeat_interval: 12h   # remind every 12h until resolved
+        routes:
+          # Critical: page someone. continue:false means don't ALSO send to warning route.
+          - matchers:
+              - severity = "critical"
+            receiver: pagerduty
+            continue: false
+          # Warning: Slack only, no page.
+          - matchers:
+              - severity = "warning"
+            receiver: slack
+            continue: false
+
+      receivers:
+        # Default receiver — catch-all that drops alerts with no severity label.
+        # Better than leaving them unrouted (which would cause AM config errors).
+        - name: "null"
+
+        - name: slack
+          slack_configs:
+            - channel: "#alerts"
+              # File-based webhook URL — read from the mounted ESO secret at request time.
+              # Rotation = update AWS SM value; ESO refreshes the K8s Secret; AM picks up the new
+              # file content on the next alert without a pod restart.
+              api_url_file: /etc/alertmanager/secrets/alertmanager-webhooks/slack-webhook-url
+              send_resolved: true
+              title: '{{ template "slack.title" . }}'
+              text: '{{ template "slack.text" . }}'
+
+        - name: pagerduty
+          pagerduty_configs:
+            - routing_key_file: /etc/alertmanager/secrets/alertmanager-webhooks/pagerduty-routing-key
+              send_resolved: true
+              severity: "{{ .CommonLabels.severity }}"
+              description: "{{ .CommonLabels.alertname }} — {{ .CommonLabels.namespace }}"
+
+      # Slack message templates. Defined here rather than in a separate ConfigMap to keep the
+      # whole AM config in one place.
+      templates:
+        - "/etc/alertmanager/config/*.tmpl"
+
+    alertmanagerSpec:
+      replicas: 2  # gossip cluster handles dedupe and silence sync between replicas
+
+      # CRITICAL: this is the bridge between ESO and Alertmanager. The chart mounts every Secret
+      # named here at /etc/alertmanager/secrets/<secret-name>/. The ExternalSecret in templates/
+      # creates this Secret name; AM mounts it; the config above reads files from it.
+      secrets:
+        - alertmanager-webhooks
+
+      storage:
+        volumeClaimTemplate:
+          spec:
+            accessModes: ["ReadWriteOnce"]
+            storageClassName: gp3
+            resources:
+              requests:
+                storage: 5Gi  # AM only stores silences + notification log; 5Gi is generous
+
+      resources:
+        requests:
+          cpu: 10m
+          memory: 64Mi
+        limits:
+          cpu: 100m
+          memory: 256Mi
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 2000
+        seccompProfile:
+          type: RuntimeDefault
+
+    # Slack template — extracted into a ConfigMap by the chart. Lives next to the AM config.
+    # Keeps the actual `text:` lines above readable.
+    templateFiles:
+      slack.tmpl: |
+        {{ define "slack.title" }}
+        [{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] {{ .CommonLabels.alertname }}
+        {{ end }}
+
+        {{ define "slack.text" }}
+        {{ range .Alerts -}}
+        *Severity:* `{{ .Labels.severity }}`
+        *Namespace:* `{{ .Labels.namespace }}`
+        *Description:* {{ .Annotations.description }}
+        *Runbook:* {{ .Annotations.runbook_url }}
+        {{ end }}
+        {{ end }}
+
+  # ──────────────────────────────────────────────────────────────────────────────────
+  # Grafana
+  # ──────────────────────────────────────────────────────────────────────────────────
+  grafana:
+    enabled: true
+    replicas: 1  # HA Grafana needs external Postgres; out of scope for portfolio
+
+    # Admin password is auto-generated by the chart on first install and stored in a Secret.
+    # Retrieve via:
+    #   kubectl -n monitoring get secret kps-grafana -o jsonpath="{.data.admin-password}" | base64 -d
+    # Production upgrade: replace with an ExternalSecret-projected Secret + `admin.existingSecret`.
+    admin:
+      existingSecret: ""
+
+    # Sidecar discovery: any ConfigMap with this label is auto-mounted as a dashboard. This is how
+    # `core-api-observability/grafana-dashboard-configmap.yaml` lands in Grafana without manual
+    # import — declarative, GitOps-friendly, no API tokens needed.
+    sidecar:
+      dashboards:
+        enabled: true
+        label: grafana_dashboard
+        labelValue: "1"
+        searchNamespace: ALL  # pick up dashboard ConfigMaps from any namespace
+      datasources:
+        enabled: true
+        label: grafana_datasource
+
+    # Loki datasource added inline. Prometheus datasource is auto-configured by the chart.
+    # Loki Service name comes from the Loki chart release in the loki/ substack — must match.
+    additionalDataSources:
+      - name: Loki
+        type: loki
+        access: proxy
+        url: http://loki.loki.svc.cluster.local:3100
+        jsonData:
+          maxLines: 1000
+
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 472  # grafana's expected UID
+      fsGroup: 472
+
+  # ──────────────────────────────────────────────────────────────────────────────────
+  # Exporters — defaults are fine; just confirming they're on
+  # ──────────────────────────────────────────────────────────────────────────────────
+  nodeExporter:
+    enabled: true
+  kubeStateMetrics:
+    enabled: true
+  kube-state-metrics:
+    # Metric label allowlist — kube-state-metrics emits a lot of labels by default. Tightening
+    # at install time prevents cardinality explosions on big clusters.
+    metricLabelsAllowlist:
+      - pods=[app.kubernetes.io/name,app.kubernetes.io/component]
+      - namespaces=[*]
+
+  # ──────────────────────────────────────────────────────────────────────────────────
+  # Default rules — kps ships with a good baseline; keep them on
+  # ──────────────────────────────────────────────────────────────────────────────────
+  defaultRules:
+    create: true
+    rules:
+      etcd: false           # we don't manage etcd on EKS (control plane is AWS-owned)
+      kubeApiserver: false  # ditto
+      kubeScheduler: false  # ditto
+      kubeControllerManager: false  # ditto
+      # The above four are EKS-specific: AWS owns and monitors the control plane. Leaving these
+      # rules on would generate alerts on metrics that don't exist (the targets aren't scraped).

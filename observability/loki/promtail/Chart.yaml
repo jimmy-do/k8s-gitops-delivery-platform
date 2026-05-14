@@ -1,0 +1,12 @@
+apiVersion: v2
+name: promtail
+description: Promtail wrapper chart for k8s-gitops-delivery-platform
+type: application
+
+version: 0.1.0
+appVersion: "3.0.0"
+
+dependencies:
+  - name: promtail
+    version: "6.17.0"
+    repository: "https://grafana.github.io/helm-charts"

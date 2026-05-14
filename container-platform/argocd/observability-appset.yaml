@@ -1,0 +1,106 @@
+# ApplicationSet generates one ArgoCD Application per observability substack. The git directory
+# generator iterates over subdirectories of observability/ and produces one Application each.
+# Adding a new substack later = create the directory; ApplicationSet picks it up automatically.
+#
+# Sync waves enforce ordering ACROSS Applications (Argo respects waves within and across apps in
+# the same ApplicationSet):
+#   wave 0: external-secrets/                   (must be first — provides ESO CRDs/controller)
+#   wave 1: security-context/                   (ClusterSecretStore depends on ESO CRDs)
+#   wave 1: kube-prometheus-stack/              (Alertmanager ExternalSecret depends on wave 0)
+#   wave 1: loki/                               (no cross-substack deps; can run alongside kps)
+#   wave 2: core-api-observability/             (ServiceMonitor/PrometheusRule need kps CRDs)
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: observability
+  namespace: argocd
+spec:
+  # goTemplate enables sprig functions in templating. Required for the path/name munging below.
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+
+  generators:
+    - matrix:
+        generators:
+          # Inner generator 1: walk observability/ subdirectories, one entry per substack.
+          # Excludes argocd/ (this file lives here, no Application needed for it).
+          - git:
+              repoURL: https://github.com/jimmy-do/k8s-gitops-delivery-platform.git
+              revision: main
+              directories:
+                - path: observability/*
+                - path: observability/loki
+                  exclude: true
+                - path: observability/argocd
+                  exclude: true
+                - path: observability/loki/*  # nested: loki/loki and loki/promtail are separate apps
+
+          # Inner generator 2: per-cluster values. Single cluster for portfolio; extend by adding
+          # entries here. ApplicationSet creates one Application per (directory × cluster) pair.
+          - list:
+              elements:
+                - cluster: production-eks
+                  url: https://kubernetes.default.svc
+
+  template:
+    metadata:
+      # Application name = "observability-<basename(path)>". e.g. observability-external-secrets,
+      # observability-kube-prometheus-stack, observability-core-api-observability.
+      name: 'observability-{{ .path.basename }}'
+
+      # Sync wave per substack. Explicit lookup keeps ordering deterministic and visible — anyone
+      # reading this manifest can see which apps land first without digging into individual apps.
+      annotations:
+        argocd.argoproj.io/sync-wave: '{{ if eq .path.basename "external-secrets" }}0{{ else if eq .path.basename "core-api-observability" }}2{{ else }}1{{ end }}'
+
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/jimmy-do/k8s-gitops-delivery-platform.git
+        targetRevision: main
+        path: '{{ .path.path }}'
+
+        # Auto-detect helm vs plain manifests via the presence of Chart.yaml. external-secrets,
+        # kps, loki, promtail are Helm; core-api-observability is plain YAML.
+        # ArgoCD does this auto-detection by default — no need to specify chart: explicitly here.
+
+      destination:
+        server: '{{ .url }}'
+        # Namespace per substack. Note: the chart's `installCRDs` and `Namespace` resource may
+        # need separate handling for first-time bootstrap. ArgoCD's CreateNamespace=true syncOption
+        # handles the namespace creation idempotently.
+        namespace: '{{ if eq .path.basename "external-secrets" }}external-secrets-system{{ else if eq .path.basename "core-api-observability" }}core-api{{ else if eq .path.basename "loki" }}loki{{ else if eq .path.basename "promtail" }}loki{{ else }}monitoring{{ end }}'
+
+      syncPolicy:
+        automated:
+          # selfHeal: revert manual kubectl changes — enforces GitOps discipline. MD-locked
+          # behavior: "selfHeal: true reverts manual kubectl changes — enforces GitOps discipline."
+          selfHeal: true
+          # prune: delete resources that no longer exist in Git. Required for GitOps to actually
+          # be declarative — without prune, removing a manifest from Git doesn't remove the
+          # resource from cluster, and drift accumulates silently.
+          prune: true
+
+        syncOptions:
+          # Idempotently create the destination namespace if missing.
+          - CreateNamespace=true
+          # Server-side apply: ArgoCD sends the manifest to the K8s API and lets the apiserver
+          # do three-way merge. Avoids the client-side last-applied-configuration annotation race
+          # that bites when multiple controllers manage the same resource. Production standard.
+          - ServerSideApply=true
+          # Skip dry-run when a referenced CRD doesn't exist yet (handles CRD-then-CR ordering
+          # within a single Application sync). Combined with sync waves above, this gives clean
+          # bootstrap-from-scratch semantics.
+          - SkipDryRunOnMissingResource=true
+          # Apply CRDs before non-CRD resources in the same sync wave.
+          - ApplyOutOfSyncOnly=true
+
+        # Retry on transient failures (CRD not yet established, webhook not yet ready). Backoff
+        # doubles each attempt up to 5 attempts. After that, the Application goes OutOfSync and
+        # surfaces in the UI — operator intervention needed.
+        retry:
+          limit: 5
+          backoff:
+            duration: 5s
+            factor: 2
+            maxDuration: 3m

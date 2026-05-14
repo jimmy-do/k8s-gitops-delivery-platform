@@ -1,0 +1,12 @@
+apiVersion: v2
+name: loki
+description: Loki wrapper chart for k8s-gitops-delivery-platform
+type: application
+
+version: 0.1.0
+appVersion: "3.0.0"
+
+dependencies:
+  - name: loki
+    version: "6.27.0"
+    repository: "https://grafana.github.io/helm-charts"

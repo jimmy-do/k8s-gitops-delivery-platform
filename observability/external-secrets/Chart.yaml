@@ -1,0 +1,25 @@
+# Umbrella chart — pins the upstream external-secrets release.
+# Same pattern as Phase 1's helm/core-api: we never run `helm install upstream/chart` directly
+# in CI. Wrapping it commits the version to Git so ArgoCD renders deterministically.
+apiVersion: v2
+name: external-secrets
+description: External Secrets Operator wrapper chart for k8s-gitops-delivery-platform
+type: application
+
+# Our chart version — bump on values changes even if upstream version is unchanged.
+# Surfaces cleanly in `helm history` and ArgoCD revision panel.
+version: 0.1.0
+
+# Application version — mirrors dependencies[0].version so they're in sync at a glance.
+appVersion: "v2.4.0"
+
+dependencies:
+  - name: external-secrets
+    # CRITICAL: pin to exact version. A range like `^2.4.0` would let ArgoCD silently pick up
+    # minor bumps which can change CRD schemas. Version drift is the #1 cause of GitOps stack
+    # breakage — every upgrade is a deliberate PR.
+    version: "2.4.1"
+    repository: "https://charts.external-secrets.io"
+    # Alternative: oci://ghcr.io/external-secrets/charts/external-secrets — OCI registries are
+    # production-preferred for supply chain (content-addressed, signed), but require
+    # `helm registry login` in ArgoCD's repo-server. HTTPS is fine for portfolio scope.

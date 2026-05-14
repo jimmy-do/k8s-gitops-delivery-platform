@@ -1,0 +1,16 @@
+# Umbrella chart wrapping kube-prometheus-stack. Same pattern as bootstrap/external-secrets/:
+# the version is committed to Git so ArgoCD renders deterministically.
+apiVersion: v2
+name: kube-prometheus-stack
+description: kube-prometheus-stack wrapper for k8s-gitops-delivery-platform
+type: application
+
+version: 0.1.0
+appVersion: "0.86.0"
+
+dependencies:
+  - name: kube-prometheus-stack
+    # Pinned exact — kps minor bumps occasionally rename Helm value keys.
+    # Every upgrade is a deliberate PR with a diff review.
+    version: "85.0.2"
+    repository: "https://prometheus-community.github.io/helm-charts"

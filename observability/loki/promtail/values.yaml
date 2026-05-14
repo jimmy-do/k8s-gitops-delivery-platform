@@ -1,0 +1,60 @@
+promtail:
+  # Where Promtail pushes logs to. Service name comes from the loki chart release: "loki" in the
+  # "loki" namespace exposes Service "loki" on port 3100. /loki/api/v1/push is the standard ingest.
+  config:
+    clients:
+      - url: http://loki.loki.svc.cluster.local:3100/loki/api/v1/push
+
+    # snippets is where the chart's default scrape config lives. Override here to add our own
+    # relabel rules — same pattern as ServiceMonitor: promote namespace, service, pod onto every
+    # log line so LogQL queries can filter by them.
+    snippets:
+      # Drop the default config and write our own — explicit is interview-defensible.
+      pipelineStages:
+        - cri: {}  # parse CRI log format (timestamp, stream, log). EKS uses containerd → CRI.
+
+      # The default scrape config covers kubernetes_sd_configs for pods. We add label promotion
+      # at the relabel stage. Keep this minimal — Loki's strength is high-cardinality search via
+      # _content_, not high-cardinality labels.
+      common:
+        - action: replace
+          source_labels:
+            - __meta_kubernetes_namespace
+          target_label: namespace
+        - action: replace
+          source_labels:
+            - __meta_kubernetes_pod_name
+          target_label: pod
+        - action: replace
+          source_labels:
+            - __meta_kubernetes_pod_container_name
+          target_label: container
+        # Promote the Helm app name as `app` — matches the label kps Grafana dashboards use to
+        # group pods. Saves writing `{app=~"core-api-.*"}` style queries.
+        - action: replace
+          source_labels:
+            - __meta_kubernetes_pod_label_app_kubernetes_io_name
+          target_label: app
+
+  # DaemonSet: one Promtail per node. tolerations let it run on master/system nodes too.
+  tolerations:
+    - effect: NoSchedule
+      operator: Exists
+
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+  # Hardening: must run as root to read /var/log/pods on the node. readOnlyRootFilesystem still on.
+  # This is one place where runAsNonRoot=false is correct — the file ownership on the host requires it.
+  containerSecurityContext:
+    runAsNonRoot: false
+    runAsUser: 0
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
