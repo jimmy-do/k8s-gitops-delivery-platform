@@ -1,0 +1,23 @@
+# Copy to terraform.tfvars for AWS mode. AWS credentials are required only for
+# this environment and the bootstrap environment.
+
+# aws_region        = "us-west-2"
+# project_name      = "k8s-gitops-delivery-platform"
+# environment       = "prod"
+# app_name          = "core-api"
+# github_repository = "jimmy-do/k8s-gitops-delivery-platform"
+
+# Leave empty to use the first three available AZs in the selected region.
+# availability_zones = ["us-west-2a", "us-west-2b", "us-west-2c"]
+
+# Cost controls for portfolio demos:
+# node_instance_types     = ["t3.medium"]
+# node_group_desired_size = 2
+# node_group_min_size     = 2
+# node_group_max_size     = 4
+# rds_enabled             = true
+
+# Apply in two phases:
+# 1. enable_cluster_bootstrap = false, terraform apply
+# 2. enable_cluster_bootstrap = true, terraform apply again after EKS exists
+enable_cluster_bootstrap = false

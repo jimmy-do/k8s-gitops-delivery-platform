@@ -1,0 +1,16 @@
+# Copy to terraform.tfvars and set the context before applying.
+# Get the current context with: kubectl config current-context
+
+kube_context = "kind-portfolio"
+
+# Other common examples:
+# kube_context = "docker-desktop"
+# kube_context = "colima"
+# kube_context = "kubernetes-admin@kubernetes"
+
+# kubeconfig_path = "~/.kube/config"
+# app_namespace   = "core-api"
+
+# Local mode keeps External Secrets disabled unless a fake or real
+# ClusterSecretStore is deliberately added.
+# external_secrets_enabled = false

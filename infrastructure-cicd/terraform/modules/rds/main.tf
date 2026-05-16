@@ -45,11 +45,10 @@ resource "aws_security_group" "this" {
   }
 }
 
-# for_each over the caller-supplied list. Separate aws_security_group_rule
-# resources (instead of inline `ingress` blocks) lets the caller add new SGs
-# later without recreating the security group itself.
+# for_each over stable list indices. The security group IDs can be produced by
+# resources in the same apply, so the keys must be known during planning.
 resource "aws_security_group_rule" "from_eks_nodes" {
-  for_each = toset(var.allowed_security_group_ids)
+  for_each = { for idx, security_group_id in var.allowed_security_group_ids : idx => security_group_id }
 
   description              = "PostgreSQL from EKS node SG ${each.value}"
   type                     = "ingress"
@@ -101,7 +100,7 @@ resource "aws_db_instance" "this" {
   identifier = var.identifier
 
   engine         = "postgres"
-  engine_version = "16.3"
+  engine_version = var.engine_version
   instance_class = var.instance_class
 
   allocated_storage     = var.allocated_storage

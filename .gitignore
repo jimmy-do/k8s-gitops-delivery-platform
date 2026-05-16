@@ -3,6 +3,7 @@
 .terraform*
 !/.terraform.lock.hcl
 !/infrastructure-cicd/terraform/*/.terraform.lock.hcl
+!/infrastructure-cicd/terraform/*/*/.terraform.lock.hcl
 *.tfstate
 *.tfstate.backup
 *.tfstate.lock.info

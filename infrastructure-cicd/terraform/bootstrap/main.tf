@@ -21,40 +21,7 @@
 
 terraform {
   required_version = ">= 1.6.0, < 2.0.0"
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.0"
-    }
-  }
   # NO backend block — defaults to local terraform.tfstate.
-}
-
-provider "aws" {
-  region = var.aws_region
-
-  default_tags {
-    tags = {
-      Project   = var.project_name
-      ManagedBy = "terraform-bootstrap"
-      Purpose   = "remote-state-backend"
-    }
-  }
-}
-
-variable "aws_region" {
-  type    = string
-  default = "us-west-2"
-}
-
-variable "environment" {
-  type    = string
-  default = "prod"
-}
-
-variable "project_name" {
-  type    = string
-  default = "k8s-gitops-delivery-platform"
 }
 
 # -----------------------------------------------------------------------------
@@ -119,14 +86,4 @@ resource "aws_dynamodb_table" "tflock" {
   lifecycle {
     prevent_destroy = true
   }
-}
-
-output "state_bucket" {
-  value       = aws_s3_bucket.tfstate.id
-  description = "Paste this into prod/backend.tf as bucket = ..."
-}
-
-output "lock_table" {
-  value       = aws_dynamodb_table.tflock.name
-  description = "Paste this into prod/backend.tf as dynamodb_table = ..."
 }
