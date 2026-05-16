@@ -162,7 +162,7 @@ This project has been tested in KodeKloud Kubernetes and AWS playground environm
 
 See [docs/testing.md](docs/testing.md) for the validation notes and [docs/playground-runbook.md](docs/playground-runbook.md) for the exact reproduction sequence.
 
-## Notable Troubleshooting Wins
+## Key Troubleshooting Scenarios
 
 Real issues found and resolved during testing:
 
