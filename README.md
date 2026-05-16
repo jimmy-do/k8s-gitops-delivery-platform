@@ -4,6 +4,24 @@ A production-style DevOps portfolio project that takes a small web service from 
 
 The goal of this project is not to show a toy Kubernetes manifest. It is to demonstrate the practical skills expected from a junior-to-mid DevOps or platform engineer: Docker, Helm, Argo CD, Terraform, AWS, CI/CD, Prometheus, Grafana, and incident-style troubleshooting.
 
+## Deployment Modes
+
+This repo supports two paths without mixing their credentials or blast radius.
+
+**Local/demo mode** is for kind, Docker Desktop Kubernetes, Colima, KodeKloud, or any existing cluster with a working kubeconfig. It requires no AWS credentials. GitHub Actions validates the repo and can publish `ghcr.io/jimmy-do/core-api`; ArgoCD running inside the cluster pulls this repo and syncs `container-platform/helm/core-api` with `values-local.yaml`.
+
+**AWS mode** is the production-style path. Terraform creates AWS infrastructure and the protected `aws-apply.yml` workflow is manual-only through `workflow_dispatch`. AWS credentials, OIDC roles, remote state, ECR, EKS, and RDS are used only in this mode.
+
+GitHub Actions intentionally does not deploy directly into KodeKloud or any temporary cluster. The delivery flow is:
+
+```text
+Developer pushes code
+  -> GitHub Actions validates, lints, and builds
+  -> GitHub Actions publishes an image to GHCR where appropriate
+  -> ArgoCD running inside Kubernetes pulls from GitHub
+  -> ArgoCD syncs the app into the cluster
+```
+
 ## What This Demonstrates
 
 This repository shows that I can:
@@ -21,19 +39,21 @@ This repository shows that I can:
 ```mermaid
 flowchart LR
   Dev["Developer"] --> GitHub["GitHub Repository"]
-  GitHub --> Actions["GitHub Actions CI"]
-  Actions --> ECR["Amazon ECR"]
-  Actions --> GitUpdate["Update Helm image tag in Git"]
-  GitUpdate --> Argo["Argo CD"]
-  Argo --> EKS["Amazon EKS"]
+  GitHub --> Validate["validate.yml"]
+  GitHub --> Image["image.yml"]
+  Image --> GHCR["GHCR image"]
+  GitHub --> Argo["ArgoCD in cluster"]
+  GHCR --> App["core-api Pods"]
+  Argo --> App
+  AWSApply["aws-apply.yml manual"] --> Terraform["Terraform AWS mode"]
+  Terraform --> EKS["Amazon EKS"]
+  Terraform --> ECR["Amazon ECR"]
+  Terraform --> RDS["Amazon RDS PostgreSQL"]
   EKS --> App["core-api Pods"]
-  App --> RDS["Amazon RDS PostgreSQL"]
   App --> Metrics["/metrics"]
   Metrics --> Prom["Prometheus"]
   Prom --> Grafana["Grafana Dashboard"]
   Prom --> Alerts["PrometheusRule / Alertmanager"]
-  Terraform["Terraform"] --> AWS["VPC, EKS, RDS, ECR, IAM, S3/DynamoDB State"]
-  AWS --> EKS
 ```
 
 ## Repository Layout
@@ -46,9 +66,13 @@ container-platform/
   argocd/                 Argo CD application manifests
 
 infrastructure-cicd/
+  argocd-apps/            ArgoCD Applications for local/demo, AWS, observability
+  github-actions/         CI/CD workflow documentation
   terraform/bootstrap/    S3 + DynamoDB remote state bootstrap
+  terraform/envs/local/   kubeconfig-driven local/demo cluster bootstrap
+  terraform/envs/aws/     protected AWS environment composition
   terraform/prod/         AWS production root module
-  terraform/modules/      VPC, ECR, EKS, RDS, observability IRSA modules
+  terraform/modules/      AWS platform, cluster bootstrap, VPC, EKS, ECR, RDS, IRSA
 
 observability/
   external-secrets/       External Secrets Operator wrapper chart
@@ -96,14 +120,19 @@ Terraform manages:
 - GitHub Actions OIDC provider and deploy role
 - EKS access entry scoped to the application namespace
 
-GitHub Actions handles:
+GitHub Actions is split by trust boundary:
 
-- Docker build
-- Trivy image scan before push
-- ECR push
-- Helm values image tag update
-- GitOps handoff to Argo CD
-- rollback backstop using `kubectl rollout undo`
+- `validate.yml`: no AWS credentials; Terraform fmt/init/validate, Helm lint/template, ArgoCD YAML lint, Docker build.
+- `image.yml`: no AWS credentials; builds and pushes `ghcr.io/jimmy-do/core-api` with `GITHUB_TOKEN`.
+- `aws-apply.yml`: manual-only AWS Terraform path using OIDC and a protected GitHub environment.
+
+Terraform is organized around environment intent:
+
+- `terraform/bootstrap`: AWS-only S3/DynamoDB remote state bootstrap.
+- `terraform/modules/aws-platform`: wraps the existing real VPC, EKS, ECR, RDS, IAM, and observability IRSA modules.
+- `terraform/modules/cluster-bootstrap`: installs cluster foundation components into an existing Kubernetes cluster with Kubernetes/Helm providers.
+- `terraform/envs/local`: kubeconfig-driven local/demo mode; no AWS provider or credentials.
+- `terraform/envs/aws`: AWS mode; remote state, AWS provider, and optional second-phase cluster bootstrap using `data "aws_eks_cluster"` and `data "aws_eks_cluster_auth"`.
 
 ### Observability
 
@@ -162,16 +191,31 @@ cd infrastructure-cicd/terraform/prod
 terraform validate
 ```
 
-Install the application chart locally or in a playground cluster:
+Bootstrap local/demo platform services:
+
+```bash
+cd infrastructure-cicd/terraform/envs/local
+cp terraform.tfvars.example terraform.tfvars
+terraform init
+terraform apply
+```
+
+Apply the ArgoCD Applications from the repository root:
+
+```bash
+kubectl apply -f infrastructure-cicd/argocd-apps/core-api-demo.yaml
+kubectl apply -f infrastructure-cicd/argocd-apps/observability.yaml
+kubectl get applications -n argocd
+```
+
+Or install the application chart directly in a playground cluster:
 
 ```bash
 helm upgrade --install core-api container-platform/helm/core-api \
   --namespace core-api \
   --create-namespace \
-  --set image.repository=ghcr.io/jimmy-do/core-api \
-  --set image.tag=latest \
-  --set ingress.enabled=false \
-  --set networkPolicy.enabled=false
+  --values container-platform/helm/core-api/values.yaml \
+  --values container-platform/helm/core-api/values-local.yaml
 ```
 
 Port-forward and test:
@@ -184,6 +228,15 @@ curl http://127.0.0.1:18080/health/live
 curl http://127.0.0.1:18080/health/ready
 curl http://127.0.0.1:18080/metrics
 ```
+
+## Troubleshooting
+
+- Kubeconfig/context: set `kube_context` explicitly in `terraform/envs/local/terraform.tfvars`; do not rely on whatever context happens to be current.
+- GHCR image pulls: public packages need no pull secret; private GHCR packages require a Kubernetes `docker-registry` secret with `read:packages`.
+- ArgoCD sync: check `kubectl get applications -n argocd` and inspect the app in the ArgoCD UI.
+- Missing namespaces: `cluster-bootstrap` creates `argocd`, `monitoring`, and `core-api`; ArgoCD Applications also use `CreateNamespace=true`.
+- External Secrets local mode: disabled by default. Enable only after adding a fake or real `ClusterSecretStore`.
+- AWS credentials: required only for `terraform/bootstrap`, `terraform/envs/aws`, and the manual `aws-apply.yml` workflow.
 
 ## Why This Project Matters
 
