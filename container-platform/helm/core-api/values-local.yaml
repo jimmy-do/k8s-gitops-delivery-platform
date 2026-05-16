@@ -1,0 +1,52 @@
+# Local/demo overrides for kind, Docker Desktop Kubernetes, Colima, and KodeKloud.
+# This file is intentionally AWS-free: no ECR repository, no IRSA annotation,
+# and no External Secrets dependency.
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/jimmy-do/core-api
+  tag: latest
+  pullPolicy: Always
+
+serviceAccount:
+  create: true
+  annotations: {}
+
+ingress:
+  enabled: false
+
+resources:
+  requests:
+    cpu: "50m"
+    memory: "64Mi"
+  limits:
+    cpu: "200m"
+    memory: "128Mi"
+
+probes:
+  startup:
+    path: /health/live
+    initialDelaySeconds: 0
+    periodSeconds: 5
+    failureThreshold: 18
+  liveness:
+    path: /health/live
+    initialDelaySeconds: 0
+    periodSeconds: 15
+    failureThreshold: 3
+  readiness:
+    path: /health/ready
+    initialDelaySeconds: 0
+    periodSeconds: 10
+    failureThreshold: 3
+
+autoscaling:
+  enabled: false
+
+env:
+  APP_ENV: demo
+  APP_VERSION: local
+
+networkPolicy:
+  enabled: false
