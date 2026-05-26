@@ -61,3 +61,4 @@ terraform.rc
 !infrastructure-cicd/terraform/bootstrap/terraform.tfstate.backup
 
 # .terraform.lock.hcl is intentionally committed — pins provider versions
+.understand-anything/
