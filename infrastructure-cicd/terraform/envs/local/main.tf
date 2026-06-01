@@ -6,4 +6,9 @@ module "cluster_bootstrap" {
   external_secrets_enabled = var.external_secrets_enabled
 
   external_secrets_service_account_annotations = {}
+  kube_prometheus_stack_values = {
+    nodeExporter = {
+      enabled = false
+    }
+  }
 }
