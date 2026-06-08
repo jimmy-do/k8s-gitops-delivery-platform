@@ -13,7 +13,7 @@ spec:
 
   source:
     repoURL: https://github.com/jimmy-do/k8s-gitops-delivery-platform.git
-    targetRevision: main
+    targetRevision: feature/local-gitops-mode
     path: container-platform/helm/core-api
     helm:
       valueFiles:
