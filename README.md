@@ -8,7 +8,7 @@ The goal of this project is not to show a toy Kubernetes manifest. It is to demo
 
 This repo supports two paths without mixing their credentials or blast radius.
 
-**Local/demo mode** is for kind, Docker Desktop Kubernetes, Colima, KodeKloud, or any existing cluster with a working kubeconfig. It requires no AWS credentials. GitHub Actions validates the repo and can publish `ghcr.io/jimmy-do/core-api`; ArgoCD running inside the cluster pulls this repo and syncs `container-platform/helm/core-api` with `values-local.yaml`.
+**Local/demo mode** is for kind, Docker Desktop Kubernetes, Colima, KodeKloud, or any existing cluster with a working kubeconfig. It requires no AWS credentials. GitHub Actions validates the repo and can publish `ghcr.io/jimmy-do/core-api`; ArgoCD running inside the cluster pulls the `feature/local-gitops-mode` branch from this repo and syncs `container-platform/helm/core-api` with `values-local.yaml`.
 
 **AWS mode** is the production-style path. Terraform creates AWS infrastructure and the protected `aws-apply.yml` workflow is manual-only through `workflow_dispatch`. AWS credentials, OIDC roles, remote state, ECR, EKS, and RDS are used only in this mode.
 
@@ -39,21 +39,208 @@ This repository shows that I can:
 ```mermaid
 flowchart LR
   Dev["Developer"] --> GitHub["GitHub Repository"]
-  GitHub --> Validate["validate.yml"]
-  GitHub --> Image["image.yml"]
+  GitHub --> Feature["feature/local-gitops-mode"]
+  GitHub --> Main["main"]
+  Feature --> Validate["validate.yml"]
+  Main --> Validate
+  Main --> Image["image.yml"]
   Image --> GHCR["GHCR image"]
-  GitHub --> Argo["ArgoCD in cluster"]
-  GHCR --> App["core-api Pods"]
-  Argo --> App
-  AWSApply["aws-apply.yml manual"] --> Terraform["Terraform AWS mode"]
-  Terraform --> EKS["Amazon EKS"]
-  Terraform --> ECR["Amazon ECR"]
-  Terraform --> RDS["Amazon RDS PostgreSQL"]
-  EKS --> App["core-api Pods"]
-  App --> Metrics["/metrics"]
+
+  subgraph Local["Local / demo mode"]
+    Kubeconfig["Existing cluster + kubeconfig"] --> LocalTF["Terraform envs/local"]
+    LocalTF --> Argo["ArgoCD"]
+    LocalTF --> Prom["Prometheus stack"]
+    Feature --> Argo
+    Argo --> LocalHelm["Helm chart + values-local.yaml"]
+    LocalHelm --> LocalApp["core-api Pods"]
+    GHCR --> LocalApp
+  end
+
+  subgraph AWS["AWS mode"]
+    AWSApply["aws-apply.yml manual"] --> AWSTF["Terraform envs/aws"]
+    AWSTF --> EKS["Amazon EKS"]
+    AWSTF --> ECR["Amazon ECR"]
+    AWSTF --> RDS["Amazon RDS PostgreSQL"]
+    EKS --> AWSApp["core-api Pods"]
+    ECR --> AWSApp
+  end
+
+  LocalApp --> Metrics["/metrics"]
+  AWSApp --> Metrics
   Metrics --> Prom["Prometheus"]
   Prom --> Grafana["Grafana Dashboard"]
   Prom --> Alerts["PrometheusRule / Alertmanager"]
+```
+
+## Local Testing
+
+The `feature/local-gitops-mode` branch is designed to test the complete GitOps loop against an existing Kubernetes cluster. Terraform installs the cluster services, then ArgoCD pulls desired state from GitHub and deploys `core-api`. No AWS credentials or AWS resources are used.
+
+### Navigation Helper
+
+The project-local `justfile` provides short, read-only commands for learning and checking the local/demo flow:
+
+| Command | Purpose |
+|---|---|
+| `just flow` | Show the local GitOps path |
+| `just terraform` | Inspect the local Terraform entrypoint, module call, and shared bootstrap ownership |
+| `just argo` | Inspect the Argo CD Application handoff |
+| `just helm-files` | Inspect local chart values and templates |
+| `just helm-local` | Lint and render the chart with local values |
+| `just cluster` | Inspect the current context, Argo CD, core-api, and optional monitoring resources |
+
+Install `just` with `brew install just`. The dependency-free backend can also be run directly, for example `./scripts/dev-nav.sh flow`.
+
+These commands do not apply Terraform, apply Kubernetes manifests, or deploy workloads. Git files describe desired state only; verify Terraform state, Argo CD sync state, and live Kubernetes state separately.
+
+### Prerequisites
+
+- Terraform `>= 1.6.0`
+- `kubectl` configured for a reachable kind, Docker Desktop, Colima, KodeKloud, or other test cluster
+- Git access to this repository
+- Cluster egress to GitHub, GHCR, and the Argo CD and Prometheus Helm repositories
+
+The local Terraform root installs ArgoCD and kube-prometheus-stack, so a local Helm CLI is optional unless you use the direct Helm fallback.
+
+### 1. Select the Branch and Cluster
+
+Run these commands from the repository root:
+
+```bash
+git switch feature/local-gitops-mode
+
+kubectl config get-contexts
+kubectl config current-context
+kubectl cluster-info
+```
+
+Copy the local variables file and set `kube_context` to the exact context shown by `kubectl config current-context`:
+
+```bash
+cp infrastructure-cicd/terraform/envs/local/terraform.tfvars.example \
+  infrastructure-cicd/terraform/envs/local/terraform.tfvars
+```
+
+Example:
+
+```hcl
+kube_context = "kind-portfolio"
+```
+
+Do not rely on the current context implicitly. The explicit value prevents Terraform from modifying the wrong cluster.
+
+### 2. Bootstrap the Local Platform
+
+Initialize, validate, plan, and apply the local Terraform root:
+
+```bash
+terraform -chdir=infrastructure-cicd/terraform/envs/local init
+terraform -chdir=infrastructure-cicd/terraform/envs/local validate
+terraform -chdir=infrastructure-cicd/terraform/envs/local plan -out=tfplan
+terraform -chdir=infrastructure-cicd/terraform/envs/local apply tfplan
+```
+
+This creates the `argocd`, `monitoring`, and `core-api` namespaces and installs ArgoCD plus kube-prometheus-stack. External Secrets remains disabled by default in local mode.
+
+Verify the platform services:
+
+```bash
+kubectl get pods -n argocd
+kubectl get pods -n monitoring
+```
+
+### 3. Start the GitOps Reconciliation
+
+Apply the ArgoCD Applications from the repository root:
+
+```bash
+kubectl apply -f infrastructure-cicd/argocd-apps/core-api-demo.yaml
+kubectl apply -f infrastructure-cicd/argocd-apps/observability.yaml
+
+kubectl get applications -n argocd
+kubectl get applications -n argocd -w
+```
+
+`core-api-demo` tracks `feature/local-gitops-mode` and renders the Helm chart with `values.yaml` plus `values-local.yaml`. The observability configuration currently tracks `main`.
+
+ArgoCD reads the remote GitHub branch, not the local working tree. Local edits must be committed and pushed before ArgoCD can reconcile them.
+
+### 4. Verify the Application
+
+Wait for the deployment and inspect the resulting resources:
+
+```bash
+kubectl -n core-api rollout status deployment/core-api --timeout=180s
+kubectl -n core-api get pods,svc
+kubectl -n argocd describe application core-api-demo
+```
+
+In a second terminal, forward the service:
+
+```bash
+kubectl -n core-api port-forward svc/core-api 18080:80
+```
+
+Test the application from the first terminal:
+
+```bash
+curl -fsS http://127.0.0.1:18080/
+curl -fsS http://127.0.0.1:18080/health/live
+curl -fsS http://127.0.0.1:18080/health/ready
+curl -fsS http://127.0.0.1:18080/metrics
+```
+
+### 5. Test a GitOps Change
+
+Change a local deployment value such as `replicaCount` in `container-platform/helm/core-api/values-local.yaml`, then push it to the tracked branch:
+
+```bash
+git add container-platform/helm/core-api/values-local.yaml
+git commit -m "test local GitOps reconciliation"
+git push origin feature/local-gitops-mode
+```
+
+ArgoCD polls Git automatically. To request an immediate refresh and watch reconciliation:
+
+```bash
+kubectl -n argocd annotate application core-api-demo \
+  argocd.argoproj.io/refresh=hard --overwrite
+
+kubectl -n argocd get application core-api-demo -w
+kubectl -n core-api get pods -w
+```
+
+The feature branch runs `validate.yml`, but `image.yml` publishes automatically only from `main`. `values-local.yaml` therefore uses the existing `ghcr.io/jimmy-do/core-api:latest` image. To test application source changes from the feature branch, manually run `image.yml` for the branch and update `image.tag` to the generated SHA tag.
+
+### 6. Open ArgoCD and Grafana
+
+ArgoCD:
+
+```bash
+kubectl -n argocd port-forward svc/argocd-server 8080:443
+kubectl -n argocd get secret argocd-initial-admin-secret \
+  -o jsonpath='{.data.password}' | base64 -d
+```
+
+Open `http://127.0.0.1:8080` and sign in as `admin`.
+
+Grafana:
+
+```bash
+kubectl -n monitoring port-forward svc/monitoring-grafana 3000:80
+```
+
+Open `http://127.0.0.1:3000` and use the local credentials `admin` / `admin`.
+
+### 7. Clean Up
+
+Delete the ArgoCD Applications before destroying the Terraform-managed platform:
+
+```bash
+kubectl delete -f infrastructure-cicd/argocd-apps/observability.yaml
+kubectl delete -f infrastructure-cicd/argocd-apps/core-api-demo.yaml
+
+terraform -chdir=infrastructure-cicd/terraform/envs/local destroy
 ```
 
 ## Repository Layout
@@ -191,24 +378,9 @@ cd infrastructure-cicd/terraform/prod
 terraform validate
 ```
 
-Bootstrap local/demo platform services:
+For the complete `feature/local-gitops-mode` workflow, follow [Local Testing](#local-testing).
 
-```bash
-cd infrastructure-cicd/terraform/envs/local
-cp terraform.tfvars.example terraform.tfvars
-terraform init
-terraform apply
-```
-
-Apply the ArgoCD Applications from the repository root:
-
-```bash
-kubectl apply -f infrastructure-cicd/argocd-apps/core-api-demo.yaml
-kubectl apply -f infrastructure-cicd/argocd-apps/observability.yaml
-kubectl get applications -n argocd
-```
-
-Or install the application chart directly in a playground cluster:
+If you want to bypass ArgoCD and validate the application chart directly in a playground cluster:
 
 ```bash
 helm upgrade --install core-api container-platform/helm/core-api \
@@ -248,5 +420,3 @@ This project is intentionally scoped like work a DevOps engineer would do on a r
 - make deployments observable
 - document failure modes
 - distinguish production design from playground constraints
-
-It is built to be readable by hiring managers while still giving engineers enough depth to review the implementation.
