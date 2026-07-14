@@ -50,6 +50,7 @@ across releases in the same namespace.
 {{- define "core-api.labels" -}}
 helm.sh/chart: {{ include "core-api.chart" . }}
 {{ include "core-api.selectorLabels" . }}
+app.kubernetes.io/part-of: core-api
 {{- if .Chart.AppVersion }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}

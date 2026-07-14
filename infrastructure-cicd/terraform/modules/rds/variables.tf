@@ -8,6 +8,12 @@ variable "instance_class" {
   default = "db.t3.micro"
 }
 
+variable "engine_version" {
+  type        = string
+  description = "Pinned PostgreSQL engine version. Override only when a region/account does not offer the default patch."
+  default     = "16.3"
+}
+
 variable "allocated_storage" {
   type    = number
   default = 20

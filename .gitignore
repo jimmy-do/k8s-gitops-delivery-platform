@@ -3,6 +3,7 @@
 .terraform*
 !/.terraform.lock.hcl
 !/infrastructure-cicd/terraform/*/.terraform.lock.hcl
+!/infrastructure-cicd/terraform/*/*/.terraform.lock.hcl
 *.tfstate
 *.tfstate.backup
 *.tfstate.lock.info
@@ -60,3 +61,4 @@ terraform.rc
 !infrastructure-cicd/terraform/bootstrap/terraform.tfstate.backup
 
 # .terraform.lock.hcl is intentionally committed — pins provider versions
+.understand-anything/

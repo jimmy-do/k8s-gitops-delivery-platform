@@ -18,10 +18,23 @@ Install the app with local overrides:
 helm upgrade --install core-api container-platform/helm/core-api \
   --namespace core-api \
   --create-namespace \
-  --set image.repository=ghcr.io/jimmy-do/core-api \
-  --set image.tag=latest \
-  --set ingress.enabled=false \
-  --set networkPolicy.enabled=false
+  --values container-platform/helm/core-api/values.yaml \
+  --values container-platform/helm/core-api/values-local.yaml
+```
+
+For the full GitOps demo flow, bootstrap ArgoCD with Terraform and apply the
+local/demo Application instead of deploying with Helm directly:
+
+```bash
+cd infrastructure-cicd/terraform/envs/local
+cp terraform.tfvars.example terraform.tfvars
+# edit kube_context before applying
+terraform init
+terraform apply
+
+cd ../../../../
+kubectl apply -f infrastructure-cicd/argocd-apps/core-api-demo.yaml
+kubectl get applications -n argocd
 ```
 
 Check pods and service:

@@ -20,7 +20,7 @@ data "aws_iam_policy_document" "eso_trust" {
     condition {
       test     = "StringEquals"
       variable = "${local.oidc_provider_hostpath}:sub"
-      values   = ["system:serviceaccount:external-secrets-system:external-secrets"]
+      values   = ["system:serviceaccount:${var.external_secrets_namespace}:${var.external_secrets_service_account_name}"]
     }
 
     condition {
