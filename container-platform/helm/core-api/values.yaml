@@ -101,6 +101,8 @@ podSecurityContext:
   runAsUser: 1001
   runAsGroup: 1001
   fsGroup: 1001        # ensures mounted volumes are writable by appuser
+  seccompProfile:
+    type: RuntimeDefault
 
 # Container-level security context — more granular than pod-level.
 securityContext:
