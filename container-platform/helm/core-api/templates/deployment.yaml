@@ -64,11 +64,16 @@ spec:
 
           # Environment variables — non-sensitive only.
           # Secrets are mounted via External Secrets Operator (see ESO ExternalSecret).
+          # App config comes FROM the ConfigMap — the same object the
+          # checksum/config annotation watches. One source of truth: values
+          # render the ConfigMap, pods consume it, the checksum restarts them
+          # when it changes. (Previously env was injected straight from
+          # values, leaving the ConfigMap rendered but never consumed and the
+          # checksum guarding nothing.)
+          envFrom:
+            - configMapRef:
+                name: {{ include "core-api.fullname" . }}-config
           env:
-            - name: APP_ENV
-              value: {{ .Values.env.APP_ENV | quote }}
-            - name: APP_VERSION
-              value: {{ .Values.env.APP_VERSION | quote }}
             # Downward API: expose pod name and namespace to the app for logging.
             # Useful for correlating Loki logs with Kubernetes pod events.
             - name: POD_NAME
