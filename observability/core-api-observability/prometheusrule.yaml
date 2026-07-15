@@ -1,6 +1,12 @@
 # PrometheusRule — three alerts for core-api. The Prometheus Operator watches this CR, renders
 # it to a rules file inside the Prometheus pod, and triggers a config reload.
 #
+# PLAT-4212 (post-INC-4211 action item: "know before customers do") — CLOSED 2026-07-15.
+# Verified: all three alerts below are present in this file, the observability-config
+# Application reports Synced/Healthy, and the golden-signals dashboard is provisioned.
+# HighMemoryUsage (85% pre-OOM warning) covers the INC-4211 failure mode specifically.
+# No further action required.
+#
 # Alert philosophy (interview talking point): every alert MUST be actionable. If "page someone at
 # 3am" is the wrong answer to firing this alert, the severity is wrong. Two warnings + one
 # critical reflects that calibration.
