@@ -42,7 +42,7 @@ probes:
     failureThreshold: 3
 
 autoscaling:
-  enabled: false
+  enabled: true   # MIDNIGHT-SCALE experiment: HPA owns replicas; chart omits spec.replicas
 
 env:
   APP_ENV: demo
