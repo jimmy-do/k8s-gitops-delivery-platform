@@ -17,8 +17,7 @@ spec:
       protocol: TCP
       name: http
   selector:
-    # PLAT-2287: pinned explicitly ahead of the multi-release split — the
-    # helper's selectorLabels will grow a component label that must NOT be
-    # part of the Service selector, so stop sourcing it from the helper.
-    app.kubernetes.io/name: core-api
-    app.kubernetes.io/instance: core-api
+    # Must match the selectorLabels in the Deployment spec.selector.matchLabels.
+    # If these don't match exactly, kubectl get endpoints returns an empty list
+    # and all traffic silently drops. This is the #1 cause of "service unreachable".
+    {{- include "core-api.selectorLabels" . | nindent 4 }}
