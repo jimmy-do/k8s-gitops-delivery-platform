@@ -16,6 +16,10 @@ serviceAccount:
 ingress:
   enabled: false
 
+# PLAT-2410: capacity review for core-api memory sizing is OPEN.
+# The limits below were restored to 128Mi after INC-4211 and stand until the
+# review lands its numbers. Do not raise them ad hoc: limit changes go
+# through this file, by PR, like every other change to this platform.
 resources:
   requests:
     cpu: "50m"
