@@ -36,7 +36,7 @@ probes:
     periodSeconds: 15
     failureThreshold: 3
   readiness:
-    path: /healthz/ready
+    path: /health/ready
     initialDelaySeconds: 0
     periodSeconds: 10
     failureThreshold: 3

@@ -75,7 +75,7 @@ probes:
     periodSeconds: 10
     failureThreshold: 3    # 3 × 10s = 30s before restart
   readiness:
-    path: /healthz/ready
+    path: /health/ready
     initialDelaySeconds: 0
     periodSeconds: 5
     failureThreshold: 3    # 3 × 5s = 15s before removed from endpoints
