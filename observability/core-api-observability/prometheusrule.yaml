@@ -16,7 +16,7 @@ metadata:
   name: core-api
   namespace: core-api
   labels:
-    release: kps  # same reasoning as ServiceMonitor — forward-compat for tighter selector
+    release: monitoring  # same reasoning as ServiceMonitor — forward-compat for tighter selector
 spec:
   groups:
     - name: core-api.rules

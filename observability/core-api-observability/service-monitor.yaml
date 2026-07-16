@@ -13,7 +13,7 @@ metadata:
     # release=kps would scope this to Prometheus instances looking for that label. We left
     # serviceMonitorSelectorNilUsesHelmValues=false in kps values.yaml, so we don't need it.
     # Kept here for forward-compat if we tighten the selector later.
-    release: kps
+    release: monitoring
 spec:
   # Match Services by label. Phase 1's core-api chart labels Services with app.kubernetes.io/name.
   selector:
